@@ -1,34 +1,30 @@
 #!/usr/bin/env python3.7
 # Copyright (c) 2018-2019 Lynn Root
 """
-Run the event loop defensively by wrapping the loop in a try/catch/finally.
+Tasks that monitor other tasks using `asyncio`'s `Event` object - modified.
 
 Notice! This requires:
  - attrs==19.1.0
 
 To run:
 
-    $ python part-0/mayhem_4.py
+    $ python part-1/mayhem_10.py
 
-Follow along: https://roguelynn.com/words/asyncio-initial-setup/
+Follow along: https://roguelynn.com/words/asyncio-true-concurrency/
 """
 
 import asyncio
-import logging
 import random
 import string
+import uuid
 
 import attr
+
 
 # NB: Using f-strings with log messages may not be ideal since no matter
 # what the log level is set at, f-strings will always be evaluated
 # whereas the old form ("foo %s" % "bar") is lazily-evaluated.
 # But I just love f-strings.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s,%(msecs)d %(levelname)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
 
 
 @attr.s
@@ -36,29 +32,102 @@ class PubSubMessage:
     instance_name = attr.ib()
     message_id = attr.ib(repr=False)
     hostname = attr.ib(repr=False, init=False)
+    restarted = attr.ib(repr=False, default=False)
+    saved = attr.ib(repr=False, default=False)
+    acked = attr.ib(repr=False, default=False)
+    extended_cnt = attr.ib(repr=False, default=0)
 
     def __attrs_post_init__(self):
         self.hostname = f"{self.instance_name}.example.net"
 
 
-async def publish(queue, n):
+async def publish(queue):
     """Simulates an external publisher of messages.
 
     Args:
         queue (asyncio.Queue): Queue to publish messages to.
-        n (int): Number of messages to publish.
     """
     choices = string.ascii_lowercase + string.digits
-    for x in range(1, n + 1):
+
+    while True:
+        msg_id = str(uuid.uuid4())
         host_id = "".join(random.choices(choices, k=4))
         instance_name = f"cattle-{host_id}"
-        msg = PubSubMessage(message_id=x, instance_name=instance_name)
+        msg = PubSubMessage(message_id=msg_id, instance_name=instance_name)
         # publish an item
-        await queue.put(msg)
-        logging.info(f"Published {x} of {n} messages")
+        asyncio.create_task(queue.put(msg))
+        print(f"Published message {msg}")
+        # simulate randomness of publishing messages
 
-    # indicate the publisher is done
-    await queue.put(None)
+
+
+async def restart_host(msg):
+    """Restart a given host.
+
+    Args:
+        msg (PubSubMessage): consumed event message for a particular
+            host to be restarted.
+    """
+    # unhelpful simulation of i/o work
+    await asyncio.sleep(random.random())
+    msg.restart = True
+    print(f"Restarted {msg.hostname}")
+
+
+async def save(msg):
+    """Save message to a database.
+
+    Args:
+        msg (PubSubMessage): consumed event message to be saved.
+    """
+    # unhelpful simulation of i/o work
+    await asyncio.sleep(random.random())
+    msg.save = True
+    print(f"Saved {msg} into database")
+
+
+async def cleanup(msg, event):
+    """Cleanup tasks related to completing work on a message.
+
+    Args:
+        msg (PubSubMessage): consumed event message that is done being
+            processed.
+    """
+    # this will block the rest of the coro until `event.set` is called
+    await event.wait()
+    # unhelpful simulation of i/o work
+    await asyncio.sleep(random.random())
+    msg.acked = True
+    print(f"Done. Acked {msg}")
+
+
+async def extend(msg, event):
+    """Periodically extend the message acknowledgement deadline.
+
+    Args:
+        msg (PubSubMessage): consumed event message to extend.
+        event (asyncio.Event): event to watch for message extention or
+            cleaning up.
+    """
+    while not event.is_set():
+        msg.extended_cnt += 1
+        print(f"Extended deadline by 3 seconds for {msg}")
+        # want to sleep for less than the deadline amount
+        await asyncio.sleep(2)
+
+
+async def handle_message(msg):
+    """Kick off tasks for a given message.
+
+    Args:
+        msg (PubSubMessage): consumed message to process.
+    """
+    event = asyncio.Event()
+    asyncio.create_task(extend(msg, event))
+    asyncio.create_task(cleanup(msg, event))
+
+    await asyncio.gather(save(msg), restart_host(msg))
+    event.set()
 
 
 async def consume(queue):
@@ -68,32 +137,26 @@ async def consume(queue):
         queue (asyncio.Queue): Queue from which to consume messages.
     """
     while True:
-        # wait for an item from the publisher
         msg = await queue.get()
-
-        # the publisher emits None to indicate that it is done
-        if msg is None:
-            break
-
-        # process the msg
-        logging.info(f"Consumed {msg}")
-        # simulate i/o operation using sleep
-        await asyncio.sleep(random.random())
+        print(f"Consumed {msg}")
+        asyncio.create_task(handle_message(msg))
 
 
 def main():
     queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
+    loop.set_debug(True)
+    loop.slow_callback_duration = 0
 
     try:
-        loop.create_task(publish(queue, 5))
+        loop.create_task(publish(queue))
         loop.create_task(consume(queue))
         loop.run_forever()
     except KeyboardInterrupt:
-        logging.info("Process interrupted")
+        print("Process interrupted")
     finally:
         loop.close()
-        logging.info("Successfully shutdown the Mayhem service.")
+        print("Successfully shutdown the Mayhem service.")
 
 
 if __name__ == "__main__":
