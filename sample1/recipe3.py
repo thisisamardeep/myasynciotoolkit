@@ -1,16 +1,15 @@
 #!/usr/bin/env python3.7
 # Copyright (c) 2018-2019 Lynn Root
 """
-Instead of `asyncio.run` in `./part-0/mayhem_1.py`, let's use
-`loop.run_until_complete` since every time `asyncio.run` is called,
-it creates and destroys a loop.
+Instead of `loop.run_until_complete` in `./part-0/mayhem_2.py`, let's use
+`loop.run_forever` to have a forever-running service.
 
 Notice! This requires:
  - attrs==19.1.0
 
 To run:
 
-    $ python part-0/mayhem_2.py
+    $ python part-0/mayhem_3.py
 
 Follow along: https://roguelynn.com/words/asyncio-initial-setup/
 """
@@ -19,8 +18,8 @@ import asyncio
 import logging
 import random
 import string
-
 import attr
+from devtools import debug
 
 # NB: Using f-strings with log messages may not be ideal since no matter
 # what the log level is set at, f-strings will always be evaluated
@@ -80,19 +79,20 @@ async def consume(queue):
         # process the msg
         logging.info(f'Consumed {msg}')
         # simulate i/o operation using sleep
-        await asyncio.sleep(1)
+        await asyncio.sleep(random.random())
 
 
 def main():
     queue = asyncio.Queue()
-
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(publish(queue, 5))
-    loop.run_until_complete(consume(queue))
+    task11 = loop.create_task(publish(queue, 5))
+    task12 = loop.create_task(consume(queue))
+    debug(task12)
+    debug(task11)
 
+    loop.run_forever()
     loop.close()
-    """
-        #   logging.info("Successfully shutdown the Mayhem service.") """
+    logging.info("Successfully shutdown the Mayhem service.")
 
 
 if __name__ == '__main__':
